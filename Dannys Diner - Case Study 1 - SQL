@@ -1,0 +1,188 @@
+ --https://8weeksqlchallenge.com/case-study-1/
+
+
+--What is the total amount each customer spent at the restaurant?
+select customer_id, sum(price) as total_spent
+from dannys_diner.sales 
+left join dannys_diner.menu on menu.product_id = sales.product_id
+group by customer_id;
+
+--How many days has each customer visited the restaurant?
+select customer_id, count(distinct order_date) as no_of_days
+from dannys_diner.sales 
+group by customer_id
+
+--What was the first item from the menu purchased by each customer?
+;with min_date as (
+select customer_id
+, min(order_date) as sale_date 
+from dannys_diner.sales 
+group by customer_id) 
+
+
+select sales.customer_id, order_date,menu.product_name
+from dannys_diner.sales 
+join dannys_diner.menu on menu.product_id = sales.product_id
+join min_date on min_date.customer_id = sales.customer_id and sales.order_date = min_date.sale_date;
+
+
+--What is the most purchased item on the menu and how many times was it purchased by all customers?
+
+WITH most_popular AS (
+    SELECT
+        product_id,
+        COUNT(customer_id) AS no_of_orders
+    FROM dannys_diner.sales
+    GROUP BY product_id
+),
+purchases AS (
+    SELECT
+        sales.product_id,
+        menu.product_name,
+        COUNT(sales.order_date) AS times_purchased
+    FROM dannys_diner.sales 
+    JOIN dannys_diner.menu  ON menu.product_id = sales.product_id
+    GROUP BY sales.product_id, menu.product_name
+)
+
+SELECT
+    purchases.product_name,
+    purchases.times_purchased
+FROM purchases 
+JOIN (
+    SELECT top 1 product_id
+    FROM most_popular
+    ORDER BY no_of_orders DESC
+    
+) most_purchased ON purchases.product_id = most_purchased.product_id;
+
+
+--Which item was the most popular for each customer?
+
+with sales_by_customer as (
+select 
+sales.customer_id
+,sales.product_id
+,count(order_date) as no_of_purchases
+from dannys_diner.sales
+group by customer_id, product_id
+)
+
+
+,most_sales_by_customer as (
+select 
+sales.customer_id
+,sales.product_id
+,sales.no_of_purchases
+,dense_rank () over(partition by customer_id order by no_of_purchases desc) as RN
+from sales_by_customer sales
+)
+
+select customer_id,product_id,no_of_purchases
+from most_sales_by_customer 
+where RN = 1 
+;
+
+--Which item was purchased first by the customer after they became a member?
+
+with first_sale as (
+select members.customer_id
+, members.join_date
+, sales.order_date
+,product_id
+,row_number() over(partition by members.customer_id order by order_date asc) as RN
+from dannys_diner.members
+join dannys_diner.sales on sales.customer_id = members.customer_id 
+and sales.order_date >= members.join_date
+)
+
+select 
+customer_id
+, join_date
+, order_date
+, menu.product_name
+from first_sale 
+left join dannys_diner.menu on menu.product_id = first_sale.product_id
+where RN = 1;
+
+
+--Which item was purchased just before the customer became a member?
+with last_sale as (
+select members.customer_id
+, members.join_date
+, sales.order_date
+,product_id
+,row_number() over(partition by members.customer_id order by order_date desc) as RN
+from dannys_diner.members
+join dannys_diner.sales on sales.customer_id = members.customer_id 
+and sales.order_date < members.join_date
+)
+
+select 
+customer_id
+, join_date
+, order_date
+, menu.product_name
+from last_sale 
+left join dannys_diner.menu on menu.product_id = last_sale.product_id
+where RN = 1;
+
+--What is the total items and amount spent for each member before they became a member?
+
+with total_sales as (
+select members.customer_id
+, members.join_date
+, count(sales.product_id) as total_products_purchased_prior_to_membership
+, sum(menu.price) as total_spent_prior_to_membership
+from dannys_diner.members
+join dannys_diner.sales on sales.customer_id = members.customer_id 
+and sales.order_date < members.join_date
+join dannys_diner.menu on menu.product_id = sales.product_id
+group by members.customer_id, members.join_date
+)
+
+select 
+customer_id
+, join_date
+, total_products_purchased_prior_to_membership
+, total_spent_prior_to_membership
+from total_sales;
+
+--If each $1 spent equates to 10 points and sushi has a 2x points multiplier - how many points would each customer have?
+
+
+select members.customer_id
+,sum(
+case 
+when menu.product_id = 1 
+	then price * 20 
+else menu.price * 10 
+end
+) as total_points
+from dannys_diner.members
+join dannys_diner.sales on sales.customer_id = members.customer_id 
+and sales.order_date >= members.join_date
+join dannys_diner.menu on menu.product_id = sales.product_id
+group by members.customer_id;
+
+--In the first week after a customer joins the program (including their join date) they earn 2x points on all items, not just sushi - how many points do customer A and B have at the end of January?
+
+with join_week as (
+select customer_id
+,join_date
+, dateadd(WEEK,1,join_date) as end_of_join_week
+from dannys_diner.members
+)
+
+select sales.customer_id, 
+sum(case when order_date between join_date and end_of_join_week 
+	then price * 20
+when order_date > end_of_join_week and sales.product_id = 1 
+	then menu.price * 20 
+when order_date > end_of_join_week and sales.product_id <> 1 
+	then menu.price * 10 else null end) as total_points
+from dannys_diner.sales
+left join dannys_diner.menu on menu.product_id = sales.product_id
+left join join_week jw on jw.customer_id = sales.customer_id
+where sales.customer_id in ('A','B')
+group by sales.customer_id
